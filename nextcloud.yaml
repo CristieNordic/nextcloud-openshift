@@ -3,12 +3,14 @@ kind: Template
 metadata:
   name: nextcloud
   annotations:
-    description: "Nextcloud - A safe home for all your data"
-    tags: "fileshare,nextcloud"
+    description: "Nextcloud Installation using Cloudian and Openshift 4.x"
+    tags: "fileshare,nextcloud,s3,aws,cloudian"
     iconClass: fa-cloud-upload
-    template.openshift.io/provider-display-name: "tobrunet"
-    template.openshift.io/documentation-url: "https://github.com/tobru/nextcloud-openshift/blob/master/README.md"
-    template.openshift.io/support-url: "https://github.com/tobru/nextcloud-openshift/issues"
+    template.openshift.io/display-name: "Nextcloud MariaDB example using Cloudian Storage"
+    template.openshift.io/provider-display-name: "issen007"
+    template.openshift.io/documentation-url: "https://github.com/CristieNordic/nextcloud-openshift/blob/master/README.md"
+    template.openshift.io/support-url: "https://github.com/tobru/nextcloud-openshift/issues" ## Fix this
+
 parameters:
 - name: NEXTCLOUD_HOST
   description: Application URL of Nextcloud (Route/host)
@@ -18,30 +20,266 @@ parameters:
   value: docker.io/nextcloud
 - name: NEXTCLOUD_IMAGE_TAG
   description: Tag of the Nextcloud Docker Image to deploy
-  value: 12-fpm
+  value: 20-fpm
 - name: NGINX_DOCKERFILE_REPO
   description: Nginx Dockerfile source repository
   value: https://github.com/tobru/nextcloud-openshift.git
+- name: STORAGECLASS
+  description: Storage Class that should be used for Persistent Volume Claim
+  value: scale-pvc
 - name: PVC_SIZE
   description: PVC size for Apps, Config and Data
   value: 5Gi
+- name: MARIADB_IMAGE_TAG
+  description: MariaDB Database Version
+  value: 10.5.7
+- name: MARIADB_DATABASE_NAME
+  description: Database Name that will be used for NextCloud
+  value: nextcloud
+- name: DB_PVC_SIZE
+  description: PVC size for MariaDB
+  value: 20Gi
+- name: MARIADB_USER
+  description: "Type your Access key that have access to your S3 Bucket"
+  value: "nextcloud"
+- name: MARIADB_PASSWORD
+  description: "Random Password will be set for MariaDB User"
+  generate: expression
+  from: "[a-zA-Z0-9]{12}"
+- name: MARIADB_ROOT_PASSWORD
+  description: "Random Password will be set for MariaDB Root Password"
+  generate: expression
+  from: "[a-zA-Z0-9]{12}"
+- name: S3_ACCESS_KEY
+  description: "Type your Access key that have access to your S3 Bucket"
+  value: ""
+- name: S3_SECRET_KEY
+  description: "Type your Secret key that have access to your S3 Bucket"
+  value: ""
+- name: S3_HOST
+  description: URL path to your S3 server
+  value: ""
+- name: S3_PORT
+  description: Communication Port for your S3 Server default is 443
+  value: "443"
+- name: S3_BUCKET
+  description: Type in a S3 Bucket Name
+  value: "nextcloud"
+- name: S3_REGION
+  description: Region where your S3 Bucket are located
+  value: ""
+- name: S3_SSL
+  description: What to use secure transfer to S3 Bucket. NextCloud does not support self signed Ceriticate
+  value: "true"
+
 objects:
+### NGING CONFIGURATION ###
+- apiVersion: v1
+  kind: ConfigMap
+  metadata:
+    name: nginx-config
+  data:
+    nginx.conf: |
+      # user www-data;
+      worker_processes 1;
+      error_log /dev/stdout info;
+      pid /tmp/nginx.pid;
+
+      events {
+        worker_connections 1024;
+      }
+
+      http {
+        include /etc/nginx/mime.types;
+        default_type application/octet-stream;
+
+        sendfile on;
+        tcp_nopush on;
+        tcp_nodelay on;
+        keepalive_timeout 65;
+        types_hash_max_size 2048;
+        server_tokens off;
+
+        upstream php-handler {
+          server 127.0.0.1:9000;
+        }
+
+        server {
+          listen *:80 default_server;
+          listen [::]:80 default_server;
+          server_name _;
+          access_log /dev/stdout;
+
+          # Docker default IP rangs
+          set_real_ip_from 172.16.0.0/12;
+          real_ip_header X-Forwarded-For;
+
+          # Add headers to serve security related headers
+          # Before enabling Strict-Transport-Security headers please read into this
+          # topic first.
+          # add_header Strict-Transport-Security "max-age=15768000;
+          add_header Strict-Transport-Security "max-age=15768000; includeSubDomains" always;
+          # includeSubDomains; preload;";
+          #
+          # WARNING: Only add the preload option once you read about
+          # the consequences in https://hstspreload.org/. This option
+          # will add the domain to a hardcoded list that is shipped
+          # in all major browsers and getting removed from this list
+          # could take several months.
+          add_header X-Content-Type-Options nosniff;
+          add_header X-XSS-Protection "1; mode=block";
+          add_header X-Robots-Tag none;
+          add_header X-Download-Options noopen;
+          add_header X-Permitted-Cross-Domain-Policies none;
+
+          # Path to the root of your installation
+          root /var/www/html/;
+
+          location = /robots.txt {
+            allow all;
+            log_not_found off;
+            access_log off;
+          }
+
+          # The following 2 rules are only needed for the user_webfinger app.
+          # Uncomment it if you're planning to use this app.
+          #rewrite ^/.well-known/host-meta /public.php?service=host-meta last;
+          #rewrite ^/.well-known/host-meta.json /public.php?service=host-meta-json
+          # last;
+
+          location = /.well-known/carddav {
+            return 301 $scheme://$host/remote.php/dav;
+          }
+          location = /.well-known/caldav {
+            return 301 $scheme://$host/remote.php/dav;
+          }
+
+          # set max upload size
+          client_max_body_size 512M;
+          fastcgi_buffers 64 4K;
+
+          # Enable gzip but do not remove ETag headers
+          gzip on;
+          gzip_vary on;
+          gzip_comp_level 4;
+          gzip_min_length 256;
+          gzip_proxied expired no-cache no-store private no_last_modified no_etag auth;
+          gzip_types application/atom+xml application/javascript application/json application/ld+json application/manifest+json application/rss+xml application/vnd.geo+json application/vnd.ms-fontobject application/x-font-ttf application/x-web-app-manifest+json application/xhtml+xml application/xml font/opentype image/bmp image/svg+xml image/x-icon text/cache-manifest text/css text/plain text/vcard text/vnd.rim.location.xloc text/vtt text/x-component text/x-cross-domain-policy;
+
+          # Uncomment if your server is build with the ngx_pagespeed module
+          # This module is currently not supported.
+          #pagespeed off;
+
+          location / {
+            rewrite ^ /index.php$uri;
+          }
+
+          location ~ ^/(?:build|tests|config|lib|3rdparty|templates|data)/ {
+            deny all;
+          }
+          location ~ ^/(?:\.|autotest|occ|issue|indie|db_|console) {
+            deny all;
+          }
+
+          location ~ ^/(?:index|remote|public|cron|core/ajax/update|status|ocs/v[12]|updater/.+|ocs-provider/.+)\.php(?:$|/) {
+            fastcgi_split_path_info ^(.+\.php)(/.*)$;
+            include fastcgi_params;
+            fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+            fastcgi_param PATH_INFO $fastcgi_path_info;
+            #fastcgi_param HTTPS on;
+            fastcgi_param REMOTE_ADDR $http_x_forwarded_for;
+            #Avoid sending the security headers twice
+            fastcgi_param modHeadersAvailable true;
+            fastcgi_param front_controller_active true;
+            fastcgi_pass php-handler;
+            fastcgi_intercept_errors on;
+            fastcgi_request_buffering off;
+            fastcgi_read_timeout 300;
+          }
+
+          location ~ ^/(?:updater|ocs-provider)(?:$|/) {
+            try_files $uri/ =404;
+            index index.php;
+          }
+
+          # Adding the cache control header for js and css files
+          # Make sure it is BELOW the PHP block
+          location ~ \.(?:css|js|woff|svg|gif)$ {
+            try_files $uri /index.php$uri$is_args$args;
+            add_header Cache-Control "public, max-age=15778463";
+            # Add headers to serve security related headers (It is intended to
+            # have those duplicated to the ones above)
+            # Before enabling Strict-Transport-Security headers please read into
+            # this topic first.
+            # add_header Strict-Transport-Security "max-age=15768000;
+            #  includeSubDomains; preload;";
+            #
+            # WARNING: Only add the preload option once you read about
+            # the consequences in https://hstspreload.org/. This option
+            # will add the domain to a hardcoded list that is shipped
+            # in all major browsers and getting removed from this list
+            # could take several months.
+            add_header X-Content-Type-Options nosniff;
+            add_header X-XSS-Protection "1; mode=block";
+            add_header X-Robots-Tag none;
+            add_header X-Download-Options noopen;
+            add_header X-Permitted-Cross-Domain-Policies none;
+            # Optional: Don't log access to assets
+            access_log off;
+          }
+
+          location ~ \.(?:png|html|ttf|ico|jpg|jpeg)$ {
+            try_files $uri /index.php$uri$is_args$args;
+            # Optional: Don't log access to other assets
+            access_log off;
+          }
+        }
+      }
+
+### STORAGE ###
+### Storage for NextCloud ###
 - apiVersion: v1
   kind: PersistentVolumeClaim
   metadata:
     name: nextcloud-data
+    labels:
+      app.kubernetes.io/name: nextcloud
+      app.kubernetes.io/component: application-storage
+      app.kubernetes.io/part-of: nextcloud
   spec:
     accessModes:
     - ReadWriteMany
     resources:
       requests:
         storage: ${PVC_SIZE}
+    storageClassName: ${STORAGECLASS}
+
+- apiVersion: v1
+  kind: PersistentVolumeClaim
+  metadata:
+    name: mariadb-pvc
+    labels:
+      app.kubernetes.io/name: mariadb
+      app.kubernetes.io/component: database-storage
+      app.kubernetes.io/part-of: nextcloud
+  spec:
+    accessModes:
+      - ReadWriteOnce
+    resources:
+      requests:
+        storage: ${DB_PVC_SIZE}
+    storageClassName: ${STORAGECLASS}
+
+### IMEAGE STREAM ###
+### NextCloud Build ###
 - apiVersion: v1
   kind: ImageStream
   metadata:
-    labels:
-      app: nextcloud
     name: nextcloud
+    labels:
+      app.kubernetes.io/name: nextcloud
+      app.kubernetes.io/component: ImageStream-NextCloud
+      app.kubernetes.io/part-of: nextcloud
   spec:
     tags:
     - annotations:
@@ -54,13 +292,37 @@ objects:
       name: ${NEXTCLOUD_IMAGE_TAG}
       referencePolicy:
         type: Source
+
+### MariaDB Build ###
 - apiVersion: v1
   kind: ImageStream
   metadata:
+    name: mariadb
     labels:
-      build: nginx
-      app: nextcloud
+      app.kubernetes.io/name: mariadb
+      app.kubernetes.io/component: ImageStream-MariaDB
+      app.kubernetes.io/part-of: nextcloud
+  spec:
+    tags:
+    - annotations: null
+      from:
+        kind: DockerImage
+        name: mariadb:${MARIADB_IMAGE_TAG}
+      importPolicy:
+        scheduled: true
+      name: ${MARIADB_IMAGE_TAG}
+      referencePolicy:
+        type: Source
+
+### Nginx Build ###
+- apiVersion: v1
+  kind: ImageStream
+  metadata:
     name: nginx
+    labels:
+      app.kubernetes.io/name: nginx
+      app.kubernetes.io/component: ImageStream-nginx
+      app.kubernetes.io/part-of: nextcloud
   spec:
     tags:
     - annotations: null
@@ -72,35 +334,32 @@ objects:
       name: latest
       referencePolicy:
         type: ""
+
+### CONFIGMAP ###
 - apiVersion: v1
-  kind: BuildConfig
+  kind: ConfigMap
   metadata:
+    name: nextcloud-configmap
     creationTimestamp: null
     labels:
-      build: nginx
+      build: nextcloud
       app: nextcloud
-    name: nginx
-  spec:
-    nodeSelector: null
-    output:
-      to:
-        kind: ImageStreamTag
-        name: nginx:latest
-    postCommit: {}
-    resources: {}
-    runPolicy: Serial
-    source:
-      git:
-        uri: ${NGINX_DOCKERFILE_REPO}
-      type: Git
-    strategy:
-      dockerStrategy:
-        from:
-          kind: DockerImage
-          name: nginx:alpine
-      type: Docker
-    triggers:
-    - type: ConfigChange
+  data:
+    MYSQL_DATABASE: ${MARIADB_DATABASE_NAME}  # Default is nextcloud
+    MYSQL_HOST: 'mariadb'
+    MYSQL_USER: ${MARIADB_USER}               # Default is nextcloud
+    MYSQL_PASSWORD: ${MARIADB_PASSWORD}       # This is automated generated password
+    MYSQL_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD} # This is automated generated password
+    OBJECTSTORE_S3_BUCKET: ${S3_BUCKET}       # Default is nextcloud
+    OBJECTSTORE_S3_HOST: ${S3_HOST}
+    OBJECTSTORE_S3_PORT: ${S3_PORT}           # Default is port 443 (https)
+    OBJECTSTORE_S3_REGION: ${S3_REGION}
+    OBJECTSTORE_S3_SSL: ${S3_SSL}             # Default is true
+    OBJECTSTORE_S3_KEY: ${S3_ACCESS_KEY}
+    OBJECTSTORE_S3_SECRET: ${S3_SECRET_KEY}
+
+### DEPLOYMENT ###
+### Deployment NextCloud and Nginx ###
 - apiVersion: v1
   kind: DeploymentConfig
   metadata:
@@ -129,23 +388,42 @@ objects:
           deploymentconfig: nextcloud
       spec:
         containers:
-        - env:
-          - name: NC_dbhost
-            value: mariadb
-          - name: NC_dbuser
-            valueFrom:
-              secretKeyRef:
-                key: database-user
-                name: mariadb
-          - name: NC_dbpassword
-            valueFrom:
-              secretKeyRef:
-                key: database-password
-                name: mariadb
-          - name: NC_dbname
-            value: nextcloud
+        ### MariaDB Instance ###
+        - name: mariadb
+          image: mariadb
+          envFrom:
+            - configMapRef:
+                name: nextcloud-configmap
+          ports:
+          - containerPort: 3306
+            protocol: TCP
+          resources: {}
+          terminationMessagePath: /dev/termination-log
+          volumeMounts:
+          - mountPath: /var/www/html
+            name: nextcloud-source
+          - mountPath: /var/www/html/data
+            name: nextcloud-data
+            subPath: data
+          - mountPath: /var/www/html/config
+            name: nextcloud-data
+            subPath: config
+          - mountPath: /var/www/html/custom_apps
+            name: nextcloud-data
+            subPath: apps
+          - mountPath: /etc/nginx/nginx.conf
+            name: nginx-config
+            subPath: nginx.conf
+          - mountPath: /var/lib/mysql
+            name: mariadb-data
+
+        ### NextCloud Deployment ###
+        - name: nextcloud
           image: nextcloud
           imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: nextcloud-configmap
           livenessProbe:
             failureThreshold: 3
             initialDelaySeconds: 1
@@ -154,9 +432,9 @@ objects:
             tcpSocket:
               port: 9000
             timeoutSeconds: 5
-          name: nextcloud
           ports:
-          - containerPort: 9000
+          - name: nextcloud-port
+            containerPort: 9000
             protocol: TCP
           readinessProbe:
             failureThreshold: 3
@@ -180,6 +458,10 @@ objects:
           - mountPath: /var/www/html/custom_apps
             name: nextcloud-data
             subPath: apps
+          - mountPath: /var/lib/mysql
+            name: mariadb-data
+
+        ### Nginx Deployment ###
         - image: nginx
           imagePullPolicy: Always
           livenessProbe:
@@ -188,11 +470,12 @@ objects:
             periodSeconds: 10
             successThreshold: 1
             tcpSocket:
-              port: 8080
+              port: 80
             timeoutSeconds: 1
           name: nginx
           ports:
-          - containerPort: 8080
+          - name: nginx-port
+            containerPort: 80
             protocol: TCP
           readinessProbe:
             failureThreshold: 3
@@ -200,7 +483,7 @@ objects:
             periodSeconds: 10
             successThreshold: 1
             tcpSocket:
-              port: 8080
+              port: 80
             timeoutSeconds: 1
           resources: {}
           terminationMessagePath: /dev/termination-log
@@ -216,17 +499,34 @@ objects:
           - mountPath: /var/www/html/custom_apps
             name: nextcloud-data
             subPath: apps
+          - mountPath: /etc/nginx/nginx.conf
+            name: nginx-config
+            subPath: nginx.conf
+          - mountPath: /var/lib/mysql
+            name: mariadb-data
+
+        ### Pod Policy ###
         dnsPolicy: ClusterFirst
         restartPolicy: Always
         securityContext: {}
         terminationGracePeriodSeconds: 30
+
+        ### Create Volumes ###
         volumes:
         - emptyDir: {}
           name: nextcloud-source
         - name: nextcloud-data
           persistentVolumeClaim:
             claimName: nextcloud-data
+        - name: nginx-config
+          configMap:
+            name: nginx-config
+        - name: mariadb-data
+          persistentVolumeClaim:
+            claimName: mariadb-pvc
     test: false
+
+    ### Trigger Policy ###
     triggers:
     - imageChangeParams:
         automatic: true
@@ -245,6 +545,9 @@ objects:
           name: nginx:latest
       type: ImageChange
     - type: ConfigChange
+
+### Services ###
+### Nginx Service ###
 - apiVersion: v1
   kind: Service
   metadata:
@@ -253,28 +556,49 @@ objects:
     name: nextcloud
   spec:
     ports:
-    - name: 8080-tcp
-      port: 8080
+    - name: 80-tcp
+      port: 80
       protocol: TCP
-      targetPort: 8080
+      targetPort: 80
     selector:
       app: nextcloud
       deploymentconfig: nextcloud
     sessionAffinity: None
     type: ClusterIP
+### MariaDB Service ###
+- apiVersion: v1
+  kind: Service
+  metadata:
+    labels:
+      app: mariadb
+    name: mariadb
+  spec:
+    ports:
+    - port: 3306
+    selector:
+      app: nextcloud
+      deploymentconfig: nextcloud
+    sessionAffinity: None
+    type: ClusterIP
+
+### Expose App to the World ###
 - apiVersion: v1
   kind: Route
   metadata:
     name: nextcloud
+    annotations:
+      template.openshift.io/expose-uri: "{.spec.host}"
   spec:
     host: ${NEXTCLOUD_HOST}
     port:
-      targetPort: 8080-tcp
+      targetPort: 80-tcp
     to:
       kind: Service
       name: nextcloud
       weight: 100
     wildcardPolicy: None
+
+### Cron Job ###
 - apiVersion: batch/v1beta1
   kind: CronJob
   metadata:
@@ -294,20 +618,9 @@ objects:
               env:
               - name: NEXTCLOUD_UPDATE
                 value: "1"
-              - name: NC_dbhost
-                value: mariadb
-              - name: NC_dbuser
-                valueFrom:
-                  secretKeyRef:
-                    key: database-user
-                    name: mariadb
-              - name: NC_dbpassword
-                valueFrom:
-                  secretKeyRef:
-                    key: database-password
-                    name: mariadb
-              - name: NC_dbname
-                value: nextcloud
+              envFrom:
+                - configMapRef:
+                    name: nextcloud-configmap
               image: nextcloud:${NEXTCLOUD_IMAGE_TAG}
               imagePullPolicy: Always
               name: nextcloud-cron
@@ -321,7 +634,7 @@ objects:
                 subPath: data
               - mountPath: /var/www/html/config
                 name: nextcloud-data
-                subPath: config
+                subPath: co nfig
               - mountPath: /var/www/html/custom_apps
                 name: nextcloud-data
                 subPath: apps

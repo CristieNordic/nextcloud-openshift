@@ -1,7 +1,6 @@
-# Nextcloud for OpenShift 3
+# Nextcloud for OpenShift 4.x with Cloudian HyperStor
 
-This repository contains an OpenShift 3 template to easily deploy Nextcloud on OpenShift.
-With this template it's possible to run your own Nextcloud instance f.e. on [APPUiO](https://appuio.ch/).
+This repository contains an OpenShift 4 template to easily deploy Nextcloud with MariaDB on OpenShift  using Cloudian HyperStor S3 Storage.
 
 ## Installation
 
@@ -14,16 +13,10 @@ PROJECT=nextcloud
 oc new-project $PROJECT
 ```
 
-### 1 Deploy Database
+### 1 Deploy Nextcloud
 
 ```
-oc -n openshift process mariadb-persistent -p MYSQL_DATABASE=nextcloud | oc -n $PROJECT create -f -
-```
-
-### 2 Deploy Nextcloud
-
-```
-oc process -f https://raw.githubusercontent.com/tobru/nextcloud-openshift/master/nextcloud.yaml -p NEXTCLOUD_HOST=nextcloud.example.com | oc -n $PROJECT create -f -
+oc process -f https://github.com/CristieNordic/nextcloud-openshift/blob/master/nextcloud.yaml -p NEXTCLOUD_HOST=<url that will be exposed> -p S3_BUCKET=<Bucket Name> -p S3_HOST=<url to your S3 target> -p S3_ACCESS_KEY=<your access key> -p S3_SECRET_KEY=<your secret key> |oc create -f -
 ```
 
 #### Template parameters
@@ -31,15 +24,13 @@ oc process -f https://raw.githubusercontent.com/tobru/nextcloud-openshift/master
 Execute the following command to get the available parameters:
 
 ```
-oc process -f https://raw.githubusercontent.com/tobru/nextcloud-openshift/master/nextcloud.yaml --parameters
+oc process -f https://github.com/CristieNordic/nextcloud-openshift/blob/master/nextcloud.yaml --parameters
 ```
 
 ### 3 Configure Nextcloud
 
 * Navigate to http://nextcloud.example.com
-* Fill in the form and finish the installation. The DB credentials can be 
-  found in the secret `mariadb`. In the Webconsole it can be found under
-  `Resources -> Secrets -> mariadb -> Reveal Secret`
+* Fill in the form and finish the installation.
 
 **Hints**
 
@@ -48,26 +39,11 @@ oc process -f https://raw.githubusercontent.com/tobru/nextcloud-openshift/master
 ## Backup
 
 ### Database
-
-You can use the provided DB dump `CronJob` template:
-
-```
-oc process -f https://raw.githubusercontent.com/tobru/nextcloud-openshift/master/mariadb-backup.yaml | oc -n MYNAMESPACE create -f -
-```
-
-This script dumps the DB to the same PV as the database stores it's data.
-You must make sure that you copy these files away to a real backup location.
-
-### Files
-
-To backup files, a simple solution would be to run f.e. [restic](http://restic.readthedocs.io/) in a Pod
-as a `CronJob` and mount the PVCs as volumes. Then use an S3 endpoint for restic
-to backup data to.
+We recommend to use [Cristie Backup Solution](https://www.cristienordic.com/data-protection) where you have Container Backup Support.
 
 ## Notes
 
 * Nextcloud Cronjob is called from a `CronJob` object every 15 minutes
-* The Dockerfile just add the `nginx.conf` to the Alpine Nginx container
 
 To use the `occ` CLI, you can use `oc exec`:
 
@@ -76,17 +52,17 @@ oc get pods
 oc exec NEXTCLOUDPOD -c nextcloud -ti php occ
 ```
 
-## Ideas
+## Know Issues
 
-* Use sclorg Nginx instead of Alpine Nginx for better OpenShift compatibility
-* Autoconfigure Nextcloud using `autoconfig.php`
-* Provide restic Backup example
+* When applying NextCloud on slow storage it can end up with a `504 Gateway Timeout` error. Refresh the page and the configuration will finish.
+If you want to solve this here is a blog that explains what you need to do [Blog](https://mamchenkov.net/wordpress/2016/08/04/504-gateway-timeout-error-on-nginx-fastcgi-php-fpm/)
+* If you are using Self Signed Certificate on a Cloudian, you cannot run over `https` and port `443`. You most run over port `80` and using `-p S3_SSL=false`
 
 ## Contributions
 
 Very welcome!
 
-1. Fork it (https://github.com/tobru/nextcloud-openshift/fork)
+1. Fork it (https://github.com/CristieNordic/nextcloud-openshift/fork)
 2. Create your feature branch (`git checkout -b my-new-feature`)
 3. Commit your changes (`git commit -am 'Add some feature'`)
 4. Push to the branch (`git push origin my-new-feature`)
