@@ -1,6 +1,6 @@
-# Nextcloud for OpenShift 4.x with Cloudian HyperStor
+# Nextcloud for OpenShift 4.x with Cloudian HyperStore
 
-This repository contains an OpenShift 4 template to easily deploy Nextcloud with MariaDB on OpenShift  using Cloudian HyperStor S3 Storage.
+This repository contains an OpenShift 4 template to easily deploy Nextcloud with MariaDB on OpenShift  using Cloudian HyperStore S3 Storage.
 
 ## Installation
 
@@ -44,6 +44,7 @@ We recommend to use [Cristie Backup Solution](https://www.cristienordic.com/data
 ## Notes
 
 * Nextcloud Cronjob is called from a `CronJob` object every 15 minutes
+* The S3 functionality in this package should work fine also with IBM Cloud Object Storage and not only Amazon AWS S3 or Cloudian HyperStore.
 
 To use the `occ` CLI, you can use `oc exec`:
 

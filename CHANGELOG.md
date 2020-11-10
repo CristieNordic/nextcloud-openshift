@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 ### Added
 - MariaDB Instance is included in to the template
 - Downloading and building locally your MariaDB Docker Image.
-- AWS S3 and Cloudian S3 Bucket can be configured part of the installation
+- AWS S3 and Cloudian HyperStore S3 Bucket can be configured part of the installation
 - Added Support for specify StorageClass where you PVC will be created.
 - Added section comments to easier understand what's going on.
 
