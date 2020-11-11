@@ -16,7 +16,7 @@ oc new-project $PROJECT
 ### 1 Deploy Nextcloud
 
 ```
-oc process -f https://github.com/CristieNordic/nextcloud-openshift/blob/master/nextcloud.yaml -p NEXTCLOUD_HOST=<url that will be exposed> -p S3_BUCKET=<Bucket Name> -p S3_HOST=<url to your S3 target> -p S3_ACCESS_KEY=<your access key> -p S3_SECRET_KEY=<your secret key> |oc create -f -
+oc process -f https://raw.githubusercontent.com/CristieNordic/nextcloud-openshift/master/nextcloud.yaml -p NEXTCLOUD_HOST=<url that will be exposed> -p S3_BUCKET=<Bucket Name> -p S3_HOST=<url to your S3 target> -p S3_ACCESS_KEY=<your access key> -p S3_SECRET_KEY=<your secret key> |oc create -f -
 ```
 
 #### Template parameters
