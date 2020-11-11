@@ -27,7 +27,7 @@ Execute the following command to get the available parameters:
 oc process -f https://raw.githubusercontent.com/CristieNordic/nextcloud-openshift/master/nextcloud.yaml --parameters
 ```
 
-### 3 Configure Nextcloud
+### 2 Configure Nextcloud
 
 * Navigate to http://nextcloud.example.com
 * Fill in the form and finish the installation.
